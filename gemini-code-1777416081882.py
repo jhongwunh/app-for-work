@@ -29,9 +29,32 @@ df = load_data()
 # --- 核心功能：AI 智慧整理與問答 ---
 def ask_ai(query, context_notes):
     if not api_key:
-        return "請先在左側輸入 API Key 才能使用 AI 功能。"
+        return "請先設定 API Key。"
     
-    model = genai.GenerativeModel('gemini-pro') # 使用最新的快速模型
+    # 這裡列出幾種可能的名稱組合
+    models_to_try = [
+        "gemini-1.5-flash",
+        "models/gemini-1.5-flash",
+        "gemini-1.5-pro",
+        "gemini-pro"
+    ]
+    
+    last_error = ""
+    for model_name in models_to_try:
+        try:
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content(f"請整理：{query}\n內容：{context_notes}")
+            return response.text
+        except Exception as e:
+            last_error = str(e)
+            continue # 如果失敗，換下一個名字試試
+            
+    # 如果全部都失敗，執行「終極偵錯」：列出所有可用模型
+    try:
+        available_models = [m.name for m in genai.list_models()]
+        return f"所有嘗試都失敗了。錯誤資訊：{last_error}\n\n你的 Key 支援的模型清單如下（請從中選一個改到程式碼裡）：\n{available_models}"
+    except Exception as list_error:
+        return f"連獲取模型清單都失敗，可能是 API Key 本身有問題。錯誤：{str(list_error)}"
     
     # 建立 Prompt：這是關鍵，要求 AI 從雜亂資料中整理
     prompt = f"""
