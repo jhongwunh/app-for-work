@@ -4,31 +4,27 @@ import datetime
 import re
 
 # --- 頁面基本設定 ---
-st.set_page_config(page_title="工作助手: PO 關聯筆記", layout="centered")
+st.set_page_config(page_title="工作助手: PO 關聯筆記", layout="wide") # 改為寬版模式方便看表格
 
 st.title("💼 工作筆記助理")
-st.markdown("輸入任何工作雜事，系統會自動識別 PO 號、業務與專案脈絡。")
 
-# --- 資料庫功能 (暫時使用 CSV) ---
+# --- 資料庫功能 ---
 DATA_FILE = "work_records.csv"
 
 def load_data():
     try:
         return pd.read_csv(DATA_FILE)
     except FileNotFoundError:
-        # 建立初始資料表
         return pd.DataFrame(columns=["日期", "原始筆記", "PO號", "業務", "專案"])
 
 def save_data(df):
     df.to_csv(DATA_FILE, index=False)
 
-# --- AI 提取邏輯 (目前先以正規表達式模擬，之後可串接 Gemini API) ---
+# --- AI 提取邏輯 (模擬) ---
 def ai_analyze_text(text):
-    # 模擬 AI 提取 PO 號碼 (例如識別 PO12345)
     po_match = re.search(r'PO\s*#?([A-Z0-9-]+)', text, re.IGNORECASE)
     po_found = po_match.group(1) if po_match else "無"
     
-    # 模擬 AI 識別業務 (檢查關鍵字)
     sales_list = ["James", "Susan", "Jill"]
     sales_found = "待確認"
     for name in sales_list:
@@ -36,7 +32,6 @@ def ai_analyze_text(text):
             sales_found = name
             break
             
-    # 模擬 AI 識別專案
     project_found = "一般事項"
     if "ScanSource" in text: project_found = "ScanSource 專案"
     elif "MODEX" in text: project_found = "MODEX 展覽"
@@ -49,34 +44,51 @@ def ai_analyze_text(text):
         "專案": project_found
     }
 
-# --- 介面設計 ---
-with st.form("note_form", clear_on_submit=True):
-    user_input = st.text_area("請輸入筆記內容：", placeholder="例如：剛才 James 說要幫 ScanSource 訂東西，PO號是 PO9987...")
-    submit_button = st.form_submit_button("儲存記錄")
+# --- 側邊欄：搜尋與篩選功能 ---
+st.sidebar.header("🔍 搜尋與篩選")
+search_query = st.sidebar.text_input("關鍵字搜尋", placeholder="輸入 PO、業務或內容...")
+
+df = load_data()
+
+# 取得所有的 PO 號清單供快速選擇
+po_list = ["全部"] + sorted(df["PO號"].unique().tolist())
+selected_po = st.sidebar.selectbox("快速過濾 PO 號", po_list)
+
+# --- 介面設計：輸入區 ---
+with st.expander("➕ 新增筆記", expanded=True):
+    with st.form("note_form", clear_on_submit=True):
+        user_input = st.text_area("請輸入筆記內容：")
+        submit_button = st.form_submit_button("儲存記錄")
 
 if submit_button and user_input:
-    # 執行模擬 AI 分析
     analysis_result = ai_analyze_text(user_input)
-    
-    # 顯示分析結果
-    st.success("成功儲存並自動標記！")
-    c1, c2, c3 = st.columns(3)
-    c1.metric("識別 PO", analysis_result["PO號"])
-    c2.metric("關聯業務", analysis_result["業務"])
-    c3.metric("專案分類", analysis_result["專案"])
-    
-    # 存入資料庫
-    df = load_data()
     new_entry = pd.DataFrame([analysis_result])
     df = pd.concat([df, new_entry], ignore_index=True)
     save_data(df)
+    st.success("儲存成功！")
+    st.rerun() # 儲存後自動刷新頁面
 
-# --- 歷史記錄檢視 ---
+# --- 歷史記錄檢視與搜尋邏輯 ---
 st.divider()
 st.subheader("📜 歷史筆記回顧")
-history_df = load_data()
-if not history_df.empty:
-    # 倒序顯示，讓最新的在上面
-    st.dataframe(history_df.sort_index(ascending=False), use_container_width=True)
+
+# 實作搜尋邏輯
+filtered_df = df.copy()
+
+if search_query:
+    # 在「原始筆記」、「PO號」、「業務」中搜尋
+    filtered_df = filtered_df[
+        filtered_df['原始筆記'].str.contains(search_query, case=False, na=False) |
+        filtered_df['PO號'].str.contains(search_query, case=False, na=False) |
+        filtered_df['業務'].str.contains(search_query, case=False, na=False)
+    ]
+
+if selected_po != "全部":
+    filtered_df = filtered_df[filtered_df['PO號'] == selected_po]
+
+if not filtered_df.empty:
+    # 顯示搜尋結果數量
+    st.caption(f"共找到 {len(filtered_df)} 筆符合條件的記錄")
+    st.dataframe(filtered_df.sort_index(ascending=False), use_container_width=True)
 else:
-    st.info("目前還沒有任何記錄，開始寫點東西吧！")
+    st.warning("找不到符合搜尋條件的記錄。")
