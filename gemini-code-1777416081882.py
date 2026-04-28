@@ -2,84 +2,159 @@ import streamlit as st
 import pandas as pd
 import google.generativeai as genai
 import datetime
+import io
+import re
 
-# --- 頁面設定 ---
-st.set_page_config(page_title="AI 智慧工作百科", layout="wide")
+# --- 1. 頁面基本設定 ---
+st.set_page_config(page_title="AI 工作智慧百科", layout="wide", page_icon="🧠")
 
-# --- API Key 設定 ---
-# 建議做法：在 Streamlit Cloud 的 Secrets 設定中加入 API_KEY
-# 這裡先提供一個輸入框讓你測試
-with st.sidebar:
-    st.header("🔑 設定")
-    api_key = st.text_input("輸入 Gemini API Key", type="password")
-    if api_key:
-        genai.configure(api_key=api_key)
+# --- 2. API Key 與模型設定 ---
+# 優先從 Secrets 讀取，如果沒有則顯示警告
+try:
+    api_key = st.secrets["API_KEY"]
+    genai.configure(api_key=api_key)
+    # 使用你清單中確認可用的模型
+    MODEL_NAME = 'models/gemini-2.5-flash'
+except Exception:
+    st.error("請在 Streamlit Secrets 中設定 API_KEY 或檢查 Key 是否正確。")
+    st.stop()
 
-st.title("🧠 我的工作智慧庫")
-st.markdown("不用翻找筆記，直接問 AI 你的工作內容。")
-
-# --- 資料庫功能 ---
+# --- 3. 資料庫功能 ---
 DATA_FILE = "work_records.csv"
+
 def load_data():
-    try: return pd.read_csv(DATA_FILE)
-    except: return pd.DataFrame(columns=["日期", "類型", "原始筆記", "PO號", "業務"])
+    try:
+        return pd.read_csv(DATA_FILE)
+    except:
+        return pd.DataFrame(columns=["日期", "類型", "原始筆記", "PO號", "業務", "來源"])
 
-df = load_data()
+def save_data(df):
+    df.to_csv(DATA_FILE, index=False)
 
-# --- 核心功能：AI 智慧整理與問答 ---
+# --- 4. AI 處理邏輯 ---
 def ask_ai(query, context_notes):
-    if not api_key:
-        return "請先設定 API Key。"
+    """根據過濾出的筆記資料回答問題"""
+    if not context_notes or len(context_notes.strip()) < 5:
+        return "❌ 在資料庫中找不到相關紀錄。請確認關鍵字，或確認檔案已正確匯入。"
+
+    model = genai.GenerativeModel(MODEL_NAME)
     
-    model = genai.GenerativeModel('models/gemini-2.5-flash')
-    
-    # 建立 Prompt：這是關鍵，要求 AI 從雜亂資料中整理
     prompt = f"""
-    你是使用者的專業秘書。以下是從他過去的雜亂筆記（Notion/Sheets）中撈出的相關內容：
-    ---
+    你是使用者的『私人工作秘書』。以下是從他的雜亂筆記中提取出的相關資料。
+    
+    ⚠️ 嚴格規則：
+    1. 你的回答【只能】參考下方的『筆記資料』。
+    2. 如果資料裡沒提到答案，請老實回答「找不到紀錄」，絕對不准編造通用的 SOP 或資訊。
+    3. 如果資料包含多個片段，請幫使用者整理成條列式的重點。
+
+    【筆記資料】：
     {context_notes}
     ---
-    請根據上述筆記回答問題："{query}"
-    
-    規則：
-    1. 如果筆記裡有 SOP 流程，請整理成步驟。
-    2. 如果有提到 PO 號碼，請列出該 PO 的負責業務與內容。
-    3. 如果筆記內容很雜，請過濾掉廢話，只顯示對工作有幫助的重點。
-    4. 如果筆記裡找不到答案，請老實說，不要瞎編。
+    使用者問題："{query}"
     """
     
     try:
         response = model.generate_content(prompt)
         return response.text
     except Exception as e:
-        return f"發生錯誤: {str(e)}"
+        return f"AI 服務異常: {str(e)}"
 
-# --- 主介面：AI 問答區 ---
-tab1, tab2, tab3 = st.tabs(["💬 智慧問答", "📝 快速記錄", "📁 檔案匯入"])
+# --- 5. 主介面設計 ---
+st.title("🧠 我的工作智慧庫")
+df = load_data()
 
+tab1, tab2, tab3 = st.tabs(["💬 智慧整理問答", "📝 快速手動紀錄", "📁 檔案批次匯入"])
+
+# --- Tab 1: 智慧問答 (最核心功能) ---
 with tab1:
-    user_query = st.text_input("你想從筆記中找什麼？", placeholder="例如：這張 PO 號是誰的專案？或是：這單的 SOP 是什麼？")
+    user_query = st.text_input("想從筆記中找什麼？", placeholder="例如：4/16 與 UTE 的會議結論？")
     
     if user_query:
-        # 簡單的相關性過濾：從資料庫找包含關鍵字的筆記當作「背景資料」
-        # 實務上可以用更精準的搜尋，這裡先用關鍵字比對
-        search_keyword = user_query[:4] # 取前幾個字當關鍵字
-        related_data = df[df['原始筆記'].str.contains(search_keyword, na=False, case=False)]
-        context_text = "\n".join(related_data['原始筆記'].tolist()[:10]) # 取前 10 則相關筆記
+        # 優化搜尋：不分大小寫，在所有欄位搜尋關鍵字
+        mask = df.astype(str).apply(lambda x: x.str.contains(user_query, case=False)).any(axis=1)
+        related_rows = df[mask].sort_index(ascending=False).head(30) # 取最新30則
         
-        with st.spinner("AI 正在閱讀並整理資料..."):
-            answer = ask_ai(user_query, context_text)
-            st.markdown("### 💡 AI 整理結果")
-            st.write(answer)
+        if not related_rows.empty:
+            # 將相關紀錄拼接成 AI 閱讀背景
+            context = ""
+            for _, row in related_rows.iterrows():
+                context += f"時間:{row['日期']} | 來源:{row['來源']} | 內容:{row['原始筆記']}\n---\n"
+            
+            with st.spinner("AI 正在閱讀您的筆記..."):
+                answer = ask_ai(user_query, context)
+                st.markdown("### 💡 AI 整理結果")
+                st.write(answer)
+        else:
+            st.warning("資料庫中完全沒有與此關鍵字相關的文字。")
 
+# --- Tab 2: 手動紀錄 ---
 with tab2:
-    # (保留之前的日常記錄功能...)
-    pass
+    with st.form("manual_note", clear_on_submit=True):
+        note_content = st.text_area("筆記內容：", placeholder="輸入要存下的事...")
+        # 修正之前的錯誤名稱
+        submit = st.form_submit_button("儲存筆記")
+        
+    if submit and note_content:
+        new_row = {
+            "日期": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "類型": "手動筆記",
+            "原始筆記": note_content,
+            "PO號": "無",
+            "業務": "無",
+            "來源": "手動輸入"
+        }
+        df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+        save_data(df)
+        st.success("紀錄已儲存！")
+        st.rerun()
 
+# --- Tab 3: 檔案匯入 ---
 with tab3:
-    # (保留之前的檔案匯入功能...)
-    pass
+    st.subheader("匯入 Notion 或 CSV 檔案")
+    uploaded_file = st.file_uploader("選擇檔案", type=['csv', 'md', 'txt'])
+    
+    if uploaded_file and st.button("確認解析並匯入"):
+        new_entries = []
+        filename = uploaded_file.name
+        
+        if filename.endswith('.csv'):
+            csv_df = pd.read_csv(uploaded_file)
+            for _, row in csv_df.iterrows():
+                content = " ".join(str(v) for v in row.values if str(v) != 'nan')
+                new_entries.append({
+                    "日期": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+                    "類型": "CSV匯入",
+                    "原始筆記": content,
+                    "PO號": "偵測中",
+                    "業務": "待確認",
+                    "來源": filename
+                })
+        else:
+            # 處理 Markdown 或 TXT
+            raw_text = uploaded_file.getvalue().decode("utf-8")
+            # 依據空行切分段落，避免切得太碎
+            paragraphs = [p.strip() for p in raw_text.split('\n\n') if len(p.strip()) > 5]
+            for p in paragraphs:
+                new_entries.append({
+                    "日期": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+                    "類型": "文件匯入",
+                    "原始筆記": p,
+                    "PO號": "偵測中",
+                    "業務": "待確認",
+                    "來源": filename
+                })
+        
+        if new_entries:
+            df = pd.concat([df, pd.DataFrame(new_entries)], ignore_index=True)
+            save_data(df)
+            st.success(f"已從 {filename} 匯入 {len(new_entries)} 條資料。")
+            st.rerun()
 
-# --- 底部原始資料檢視 ---
-with st.expander("查看原始資料庫"):
-    st.dataframe(df.sort_index(ascending=False))
+# --- 6. 原始資料查看 ---
+st.divider()
+with st.expander("📊 查看/搜尋原始資料庫內容"):
+    search_db = st.text_input("在資料庫中篩選文字：", key="db_search")
+    if search_db:
+        st.dataframe(df[df['原始筆記'].str.contains(search_db, case=False, na=False)], use_container_width=True)
+    else:
+        st.dataframe(df.sort_index(ascending=False), use_container_width=True)
