@@ -1,9 +1,8 @@
 import streamlit as st
 import pandas as pd
 import google.generativeai as genai
-import datetime
-import io
-import re
+import PyPDF2
+from PIL import Image
 
 # --- 1. 頁面基本設定 ---
 st.set_page_config(page_title="AI 工作智慧百科", layout="wide", page_icon="🧠")
@@ -32,33 +31,24 @@ def save_data(df):
     df.to_csv(DATA_FILE, index=False)
 
 # --- 4. AI 處理邏輯 ---
-def ask_ai(query, context_notes):
-    """根據過濾出的筆記資料回答問題"""
-    if not context_notes or len(context_notes.strip()) < 5:
-        return "❌ 在資料庫中找不到相關紀錄。請確認關鍵字，或確認檔案已正確匯入。"
-
-    model = genai.GenerativeModel(MODEL_NAME)
+def ask_ai_with_media(query, context_notes, uploaded_media=None):
+    model = genai.GenerativeModel('models/gemini-2.5-flash')
     
-    prompt = f"""
-    你是使用者的『私人工作秘書』。以下是從他的雜亂筆記中提取出的相關資料。
+    # 組合指令
+    prompt = f"你是工作秘書。請根據提供的筆記資料回答：{query}\n\n【筆記資料】：\n{context_notes}"
     
-    ⚠️ 嚴格規則：
-    1. 你的回答【只能】參考下方的『筆記資料』。
-    2. 如果資料裡沒提到答案，請老實回答「找不到紀錄」，絕對不准編造通用的 SOP 或資訊。
-    3. 如果資料包含多個片段，請幫使用者整理成條列式的重點。
-
-    【筆記資料】：
-    {context_notes}
-    ---
-    使用者問題："{query}"
-    """
+    contents = [prompt]
     
-    try:
-        response = model.generate_content(prompt)
-        return response.text
-    except Exception as e:
-        return f"AI 服務異常: {str(e)}"
-
+    # 如果使用者有另外上傳圖檔/PDF，直接餵給 AI 看
+    if uploaded_media:
+        for file in uploaded_media:
+            if file.type.startswith("image"):
+                img = Image.open(file)
+                contents.append(img)
+            # 註：Gemini API 支援直接傳送檔案，這裡簡化處理圖片
+    
+    response = model.generate_content(contents)
+    return response.text
 # --- 5. 主介面設計 ---
 st.title("🧠 我的工作智慧庫")
 df = load_data()
@@ -67,30 +57,21 @@ tab1, tab2, tab3 = st.tabs(["💬 智慧整理問答", "📝 快速手動紀錄"
 
 # --- Tab 1: 智慧整理問答 (相容舊資料版) ---
 with tab1:
-    user_query = st.text_input("想從筆記中找什麼？", placeholder="例如：4/16 與 UTE 的會議結論？")
+    user_query = st.text_input("想找什麼？(可配合下方上傳圖檔讓 AI 同步分析)")
+    # 讓使用者可以臨時丟一張當初筆記裡的截圖給 AI 看
+    extra_files = st.file_uploader("如果有相關圖片/PDF 也可以丟上來一起分析", 
+                                   type=['png', 'jpg', 'jpeg', 'pdf'], 
+                                   accept_multiple_files=True)
     
     if user_query:
-        # 優化搜尋：在所有欄位中搜尋關鍵字
+        # 搜尋 CSV 裡的舊文字資料
         mask = df.astype(str).apply(lambda x: x.str.contains(user_query, case=False)).any(axis=1)
-        related_rows = df[mask].sort_index(ascending=False).head(30)
+        related_data = df[mask].sort_index(ascending=False).head(20)
+        context = "\n".join(related_data['原始筆記'].tolist())
         
-        if not related_rows.empty:
-            context = ""
-            for _, row in related_rows.iterrows():
-                # --- 這裡改用 .get() 就不會報錯 ---
-                # 如果舊資料沒有 '來源' 或 '日期'，就給它一個預設值
-                r_date = row.get('日期', '未知時間')
-                r_source = row.get('來源', '舊有紀錄')
-                r_note = row.get('原始筆記', '無內容')
-                
-                context += f"時間:{r_date} | 來源:{r_source} | 內容:{r_note}\n---\n"
-            
-            with st.spinner("AI 正在閱讀您的筆記..."):
-                answer = ask_ai(user_query, context)
-                st.markdown("### 💡 AI 整理結果")
-                st.write(answer)
-        else:
-            st.warning("資料庫中完全沒有與此關鍵字相關的文字。")
+        with st.spinner("AI 正在閱讀文字紀錄與分析圖片..."):
+            answer = ask_ai_with_media(user_query, context, extra_files)
+            st.write(answer)
 
 # --- Tab 2: 手動紀錄 ---
 with tab2:
