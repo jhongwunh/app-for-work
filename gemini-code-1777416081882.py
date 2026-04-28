@@ -31,7 +31,7 @@ def ask_ai(query, context_notes):
     if not api_key:
         return "請先在左側輸入 API Key 才能使用 AI 功能。"
     
-    model = genai.GenerativeModel('gemini-1.5-flash') # 使用最新的快速模型
+    model = genai.GenerativeModel('gemini-1.5-flash-latest') # 使用最新的快速模型
     
     # 建立 Prompt：這是關鍵，要求 AI 從雜亂資料中整理
     prompt = f"""
