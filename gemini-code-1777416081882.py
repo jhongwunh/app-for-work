@@ -52,7 +52,7 @@ def ai_analyze_text(text):
 # --- 介面設計 ---
 with st.form("note_form", clear_on_submit=True):
     user_input = st.text_area("請輸入筆記內容：", placeholder="例如：剛才 James 說要幫 ScanSource 訂東西，PO號是 PO9987...")
-    submit_button = st.form_submit_with_button("儲存記錄")
+    submit_button = st.form_submit_button("儲存記錄")
 
 if submit_button and user_input:
     # 執行模擬 AI 分析
