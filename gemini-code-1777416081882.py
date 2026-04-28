@@ -113,46 +113,53 @@ with tab2:
         st.success("紀錄已儲存！")
         st.rerun()
 
-# --- Tab 3: 檔案匯入 ---
+# --- Tab 3: 檔案匯入 (支援多檔案上傳) ---
 with tab3:
-    st.subheader("匯入 Notion 或 CSV 檔案")
-    uploaded_file = st.file_uploader("選擇檔案", type=['csv', 'md', 'txt'])
+    st.subheader("匯入多個 Notion 或 CSV 檔案")
+    # 關鍵修正：加上 accept_multiple_files=True
+    uploaded_files = st.file_uploader("選擇檔案 (可多選)", type=['csv', 'md', 'txt'], accept_multiple_files=True)
     
-    if uploaded_file and st.button("確認解析並匯入"):
+    if uploaded_files and st.button("確認解析並匯入所有檔案"):
         new_entries = []
-        filename = uploaded_file.name
         
-        if filename.endswith('.csv'):
-            csv_df = pd.read_csv(uploaded_file)
-            for _, row in csv_df.iterrows():
-                content = " ".join(str(v) for v in row.values if str(v) != 'nan')
-                new_entries.append({
-                    "日期": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
-                    "類型": "CSV匯入",
-                    "原始筆記": content,
-                    "PO號": "偵測中",
-                    "業務": "待確認",
-                    "來源": filename
-                })
-        else:
-            # 處理 Markdown 或 TXT
-            raw_text = uploaded_file.getvalue().decode("utf-8")
-            # 依據空行切分段落，避免切得太碎
-            paragraphs = [p.strip() for p in raw_text.split('\n\n') if len(p.strip()) > 5]
-            for p in paragraphs:
-                new_entries.append({
-                    "日期": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
-                    "類型": "文件匯入",
-                    "原始筆記": p,
-                    "PO號": "偵測中",
-                    "業務": "待確認",
-                    "來源": filename
-                })
+        for uploaded_file in uploaded_files:
+            filename = uploaded_file.name
+            
+            if filename.endswith('.csv'):
+                try:
+                    csv_df = pd.read_csv(uploaded_file)
+                    for _, row in csv_df.iterrows():
+                        # 把所有欄位的內容串起來，確保 AI 讀得到
+                        content = " ".join(str(v) for v in row.values if str(v) != 'nan')
+                        new_entries.append({
+                            "日期": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+                            "類型": "CSV匯入",
+                            "原始筆記": content,
+                            "PO號": "偵測中",
+                            "業務": "待確認",
+                            "來源": filename
+                        })
+                except Exception as e:
+                    st.error(f"檔案 {filename} 讀取失敗: {e}")
+            else:
+                # 處理 Markdown 或 TXT
+                raw_text = uploaded_file.getvalue().decode("utf-8")
+                # 依據空行切分段落，保持內容完整性
+                paragraphs = [p.strip() for p in raw_text.split('\n\n') if len(p.strip()) > 5]
+                for p in paragraphs:
+                    new_entries.append({
+                        "日期": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+                        "類型": "文件匯入",
+                        "原始筆記": p,
+                        "PO號": "偵測中",
+                        "業務": "待確認",
+                        "來源": filename
+                    })
         
         if new_entries:
             df = pd.concat([df, pd.DataFrame(new_entries)], ignore_index=True)
             save_data(df)
-            st.success(f"已從 {filename} 匯入 {len(new_entries)} 條資料。")
+            st.success(f"🎉 成功！已從 {len(uploaded_files)} 個檔案中匯入 {len(new_entries)} 條資料。")
             st.rerun()
 
 # --- 6. 原始資料查看 ---
