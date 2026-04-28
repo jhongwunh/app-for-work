@@ -96,53 +96,58 @@ with tab2:
 
 # --- Tab 3: 檔案匯入 (支援多檔案上傳) ---
 with tab3:
-    st.subheader("匯入多個 Notion 或 CSV 檔案")
-    # 關鍵修正：加上 accept_multiple_files=True
-    uploaded_files = st.file_uploader("選擇檔案 (可多選)", type=['csv', 'md', 'txt'], accept_multiple_files=True)
+    st.subheader("匯入多個檔案 (支援 Notion 導出的 MD, CSV, PDF, 圖片)")
+    uploaded_files = st.file_uploader("請選擇要匯入的所有檔案", 
+                                     type=['csv', 'md', 'txt', 'pdf', 'png', 'jpg', 'jpeg'], 
+                                     accept_multiple_files=True)
     
-    if uploaded_files and st.button("確認解析並匯入所有檔案"):
+    if uploaded_files and st.button("開始批次解析匯入"):
         new_entries = []
+        progress_bar = st.progress(0)
         
-        for uploaded_file in uploaded_files:
+        for i, uploaded_file in enumerate(uploaded_files):
             filename = uploaded_file.name
+            file_type = uploaded_file.type
             
-            if filename.endswith('.csv'):
-                try:
+            try:
+                # 1. 處理 CSV
+                if filename.endswith('.csv'):
                     csv_df = pd.read_csv(uploaded_file)
                     for _, row in csv_df.iterrows():
-                        # 把所有欄位的內容串起來，確保 AI 讀得到
                         content = " ".join(str(v) for v in row.values if str(v) != 'nan')
-                        new_entries.append({
-                            "日期": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
-                            "類型": "CSV匯入",
-                            "原始筆記": content,
-                            "PO號": "偵測中",
-                            "業務": "待確認",
-                            "來源": filename
-                        })
-                except Exception as e:
-                    st.error(f"檔案 {filename} 讀取失敗: {e}")
-            else:
-                # 處理 Markdown 或 TXT
-                raw_text = uploaded_file.getvalue().decode("utf-8")
-                # 依據空行切分段落，保持內容完整性
-                paragraphs = [p.strip() for p in raw_text.split('\n\n') if len(p.strip()) > 5]
-                for p in paragraphs:
-                    new_entries.append({
-                        "日期": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
-                        "類型": "文件匯入",
-                        "原始筆記": p,
-                        "PO號": "偵測中",
-                        "業務": "待確認",
-                        "來源": filename
-                    })
-        
+                        new_entries.append({"日期": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"), "類型": "CSV資料", "原始筆記": content, "來源": filename})
+                
+                # 2. 處理 PDF
+                elif filename.endswith('.pdf'):
+                    pdf_reader = PyPDF2.PdfReader(uploaded_file)
+                    pdf_text = "\n".join([page.extract_text() for page in pdf_reader.pages])
+                    new_entries.append({"日期": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"), "類型": "PDF文件", "原始筆記": pdf_text, "來源": filename})
+                
+                # 3. 處理圖片 (JPG/PNG) - 讓 AI 先掃描圖片內容
+                elif file_type.startswith("image"):
+                    img = Image.open(uploaded_file)
+                    model = genai.GenerativeModel('models/gemini-2.5-flash')
+                    # 讓 AI 幫這張照片做文字轉述
+                    response = model.generate_content(["請簡要說明這張圖片的內容，如果是文件或對話，請提取關鍵文字：", img])
+                    new_entries.append({"日期": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"), "類型": "圖片辨識", "原始筆記": f"[圖片內容]: {response.text}", "來源": filename})
+                
+                # 4. 處理 Markdown / 文字檔
+                else:
+                    raw_text = uploaded_file.getvalue().decode("utf-8")
+                    paragraphs = [p.strip() for p in raw_text.split('\n\n') if len(p.strip()) > 5]
+                    for p in paragraphs:
+                        new_entries.append({"日期": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"), "類型": "文件段落", "原始筆記": p, "來源": filename})
+            
+            except Exception as e:
+                st.error(f"解析 {filename} 時出錯: {e}")
+            
+            progress_bar.progress((i + 1) / len(uploaded_files))
+
         if new_entries:
             df = pd.concat([df, pd.DataFrame(new_entries)], ignore_index=True)
             save_data(df)
-            st.success(f"🎉 成功！已從 {len(uploaded_files)} 個檔案中匯入 {len(new_entries)} 條資料。")
+            st.success(f"✅ 匯入完成！共處理 {len(uploaded_files)} 個檔案，新增 {len(new_entries)} 條筆記。")
             st.rerun()
-
 # --- 6. 原始資料查看 ---
 st.divider()
 with st.expander("📊 查看/搜尋原始資料庫內容"):
