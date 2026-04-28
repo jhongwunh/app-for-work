@@ -65,20 +65,25 @@ df = load_data()
 
 tab1, tab2, tab3 = st.tabs(["💬 智慧整理問答", "📝 快速手動紀錄", "📁 檔案批次匯入"])
 
-# --- Tab 1: 智慧問答 (最核心功能) ---
+# --- Tab 1: 智慧整理問答 (相容舊資料版) ---
 with tab1:
     user_query = st.text_input("想從筆記中找什麼？", placeholder="例如：4/16 與 UTE 的會議結論？")
     
     if user_query:
-        # 優化搜尋：不分大小寫，在所有欄位搜尋關鍵字
+        # 優化搜尋：在所有欄位中搜尋關鍵字
         mask = df.astype(str).apply(lambda x: x.str.contains(user_query, case=False)).any(axis=1)
-        related_rows = df[mask].sort_index(ascending=False).head(30) # 取最新30則
+        related_rows = df[mask].sort_index(ascending=False).head(30)
         
         if not related_rows.empty:
-            # 將相關紀錄拼接成 AI 閱讀背景
             context = ""
             for _, row in related_rows.iterrows():
-                context += f"時間:{row['日期']} | 來源:{row['來源']} | 內容:{row['原始筆記']}\n---\n"
+                # --- 這裡改用 .get() 就不會報錯 ---
+                # 如果舊資料沒有 '來源' 或 '日期'，就給它一個預設值
+                r_date = row.get('日期', '未知時間')
+                r_source = row.get('來源', '舊有紀錄')
+                r_note = row.get('原始筆記', '無內容')
+                
+                context += f"時間:{r_date} | 來源:{r_source} | 內容:{r_note}\n---\n"
             
             with st.spinner("AI 正在閱讀您的筆記..."):
                 answer = ask_ai(user_query, context)
